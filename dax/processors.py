@@ -209,6 +209,73 @@ class ScanProcessor(Processor):
         else:
             return scan_dict['scan_type'] in self.scan_types
 
+class MultiScanProcessor(Processor):
+    """ Multi Scan Processor class for processor on a session on XNAT """
+    def __init__(self, walltime_str, memreq_mb, spider_path, version=None, ppn=1, suffix_proc=''):
+        """
+        Entry point for the session processor
+
+        :param walltime_str: Amount of walltime to request for the process
+        :param memreq_mb: Amount of memory in megavytes to request for the process
+        :param spider_path: Absolute path to the spider
+        :param version: Version of the spider (taken from the file name)
+        :param ppn: Number of processors per node to request
+        :param suffix_proc: Processor suffix
+        :return: None
+
+        """
+        super(MultiScanProcessor, self).__init__(walltime_str, memreq_mb, spider_path, version, ppn, suffix_proc)
+        self.scan_ids = list()
+    def has_inputs(self):
+        """
+        Check to see that the session has the required inputs to run.
+
+        :raises: NotImplementedError if not overriden from base class.
+        :return: None
+        """
+        raise NotImplementedError()
+
+    def should_run(self, session_dict):
+        """
+        By definition, this should always run, so it just returns true with no checks
+
+        :param session_dict: Dictionary of session information for
+         XnatUtils.list_experiments()
+        :return: True
+
+        """
+        return True
+
+    def get_assessor_name(self, csess):
+        """
+        Get the name of the assessor
+
+        :param csess: CachedImageSession from XnatUtils
+        :return: String of the assessor label
+
+        """
+        session_dict = csess.info()
+        proj_label = session_dict['project']
+        subj_label = session_dict['subject_label']
+        sess_label = session_dict['label']
+        return proj_label+'-x-'+subj_label+'-x-'+sess_label+'-s-'.join(self.scan_ids)+'-x-'+self.name
+
+    def get_task(self, intf, csess, upload_dir):
+        """
+        Return the Task object
+
+        :param intf: XNAT interface see pyxnat.Interface
+        :param csess: CachedImageSession from XnatUtils
+        :param upload_dir: directory to put the data after run on the node
+        :return: Task object of the assessor
+
+        """
+        sess_info = csess.info()
+        assessor_name = self.get_assessor_name(csess)
+        session = XnatUtils.get_full_object(intf, sess_info)
+        assessor = session.assessor(assessor_name)
+        return task.Task(self, assessor, upload_dir)
+
 class SessionProcessor(Processor):
     """ Session Processor class for processor on a session on XNAT """
     def __init__(self, walltime_str, memreq_mb, spider_path, version=None, ppn=1, suffix_proc=''):
@@ -287,6 +354,7 @@ def processors_by_type(proc_list):
     """
     sess_proc_list = list()
     scan_proc_list = list()
+    multi_scan_list = list()
 
     # Build list of processors by type
     for proc in proc_list:
@@ -294,7 +362,10 @@ def processors_by_type(proc_list):
             scan_proc_list.append(proc)
         elif issubclass(proc.__class__, SessionProcessor):
             sess_proc_list.append(proc)
+        elif issubclass(proc.__class__, MultiScanProcessor):
+            multi_scan_list.append(proc)
+
         else:
             LOGGER.warn('unknown processor type:'+proc)
 
-    return sess_proc_list, scan_proc_list
+    return sess_proc_list, scan_proc_list, multi_scan_list
