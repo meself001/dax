@@ -305,10 +305,10 @@ class Launcher(object):
 
         # Get lists of modules/processors per scan/exp for this project
         exp_mods, scan_mods = modules.modules_by_type(self.project_modules_dict[project_id])
-        exp_procs, scan_procs = processors.processors_by_type(self.project_process_dict[project_id])
+        exp_procs, scan_procs, multiscan_procs = processors.processors_by_type(self.project_process_dict[project_id])
 
         # Check for new processors
-        has_new = self.has_new_processors(xnat, project_id, exp_procs, scan_procs)
+        has_new = self.has_new_processors(xnat, project_id, exp_procs, scan_procs, multiscan_procs)
 
         # Get the list of sessions:
         sessions = self.get_sessions_list(xnat, project_id, sessions_local)
@@ -335,7 +335,7 @@ class Launcher(object):
                     # NOTE: we keep the starting time of the update
                     # and will check if something change during the update
                     update_start_time = datetime.now()
-                    self.build_session(xnat, sess_info, exp_procs, scan_procs, exp_mods, scan_mods)
+                    self.build_session(xnat, sess_info, exp_procs, scan_procs, exp_mods, scan_mods, multiscan_procs)
                     got_updated = self.set_session_lastupdated(xnat, sess_info, update_start_time)
                     update_run_count = update_run_count+1
                     LOGGER.debug('\n')
@@ -346,7 +346,7 @@ class Launcher(object):
             self.module_afterrun(xnat, project_id)
 
     def build_session(self, xnat, sess_info, sess_proc_list,
-                      scan_proc_list, sess_mod_list, scan_mod_list):
+                      scan_proc_list, sess_mod_list, scan_mod_list, multiscan_procs):
         """
         Build a session
 
@@ -400,6 +400,34 @@ class Launcher(object):
                     sess_task = sess_proc.get_task(xnat, csess, RESULTS_DIR)
                     self.log_updating_status(sess_proc.name, sess_task.assessor_label)
                     has_inputs, qcstatus = sess_proc.has_inputs(csess)
+                    if has_inputs == 1:
+                        sess_task.set_status(task.NEED_TO_RUN)
+                        sess_task.set_qcstatus(task.JOB_PENDING)
+                    elif has_inputs == -1:
+                        sess_task.set_status(task.NO_DATA)
+                        sess_task.set_qcstatus(qcstatus)
+                    else:
+                        sess_task.set_qcstatus(qcstatus)
+                else:
+                    # Other statuses handled by dax_update_tasks
+                    pass
+
+        for multiscan_proc in multiscan_procs:
+            if multiscan_proc.should_run(session_info):
+
+                assr_name = multiscan_proc.get_assessor_name(csess)
+
+                # Look for existing assessor
+                proc_assr = None
+                for assr in csess.assessors():
+                    if assr.info()['label'] == assr_name:
+                        proc_assr = assr
+
+                if proc_assr == None or proc_assr.info()['procstatus'] == task.NEED_INPUTS:
+                    # Create it if it doesn't exist
+                    ms_task = multiscan_proc.get_task(xnat, csess, RESULTS_DIR)
+                    self.log_updating_status(multiscan_proc.name, ms_task.assessor_label)
+                    has_inputs, qcstatus = multiscan_proc.has_inputs(csess)
                     if has_inputs == 1:
                         sess_task.set_status(task.NEED_TO_RUN)
                         sess_task.set_qcstatus(task.JOB_PENDING)
@@ -630,7 +658,7 @@ The project is not part of the settings."""
 
         # Get lists of processors for this project
         pp_dict = self.project_process_dict[project_id]
-        sess_procs, scan_procs = processors.processors_by_type(pp_dict)
+        sess_procs, scan_procs, multiscan_procs = processors.processors_by_type(pp_dict)
 
         # Get lists of assessors for this project
         assr_list = self.get_assessors_list(xnat, project_id, sessions_local)
@@ -638,14 +666,14 @@ The project is not part of the settings."""
         # Match each assessor to a processor, get a task, and add to list
         for assr_info in assr_list:
             if is_valid_assessor(assr_info):
-                cur_task = self.generate_task(xnat, assr_info, sess_procs, scan_procs)
+                cur_task = self.generate_task(xnat, assr_info, sess_procs, scan_procs, multiscan_procs)
                 if cur_task:
                     task_list.append(cur_task)
 
         return task_list
 
     @staticmethod
-    def match_proc(assr_info, sess_proc_list, scan_proc_list):
+    def match_proc(assr_info, sess_proc_list, scan_proc_list, multiscan_proc_list):
         """
         Check if an assessor is a match with the processors
 
@@ -666,9 +694,14 @@ The project is not part of the settings."""
                scan_proc.name == assr_info['proctype']:
                 return scan_proc
 
+        # Look for a match in multiscan processors
+        for multiscan_proc in multiscan_proc_list:
+            if multiscan_proc.xsitype == assr_info['xsiType'] and\
+               multiscan_proc.name == assr_info['proctype']:
+                return multiscan_proc
         return None
 
-    def generate_task(self, xnat, assr_info, sess_proc_list, scan_proc_list):
+    def generate_task(self, xnat, assr_info, sess_proc_list, scan_proc_list, multiscan_proc_list):
         """
         Generate a task for the assessor in the info
 
@@ -678,7 +711,7 @@ The project is not part of the settings."""
         :param scan_proc_list: list of processors running on a scan
         :return: task if processor and assessor match, None otherwise
         """
-        task_proc = self.match_proc(assr_info, sess_proc_list, scan_proc_list)
+        task_proc = self.match_proc(assr_info, sess_proc_list, scan_proc_list, multiscan_proc_list)
 
         if task_proc == None:
             LOGGER.warn('no matching processor found:'+assr_info['assessor_label'])
@@ -789,7 +822,7 @@ The project is not part of the settings."""
             return True
 
     @staticmethod
-    def has_new_processors(xnat, project_id, sess_proc_list, scan_proc_list):
+    def has_new_processors(xnat, project_id, sess_proc_list, scan_proc_list, multiscan_proc_list):
         """
         Check if has new processors
 
@@ -804,7 +837,7 @@ The project is not part of the settings."""
         assr_type_set = set([x['proctype'] for x in assr_list])
 
         # Get unique list of processors prescribed for project
-        proc_name_set = set([x.name for x in sess_proc_list+scan_proc_list])
+        proc_name_set = set([x.name for x in sess_proc_list+scan_proc_list+multiscan_proc_list])
 
         # Get list of processors that don't have assessors in XNAT yet
         diff_list = list(proc_name_set.difference(assr_type_set))
