@@ -9,4 +9,4 @@ from .version import VERSION as __version__
 from .XnatUtils import SpiderProcessHandler
 from .modules import ScanModule, SessionModule
 from .spiders import ScanSpider, SessionSpider
-from .processors import ScanProcessor, SessionProcessor
+from .processors import ScanProcessor, SessionProcessor, MultiScanProcessor
