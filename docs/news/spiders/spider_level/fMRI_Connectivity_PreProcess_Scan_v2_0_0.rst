@@ -33,7 +33,7 @@ Data
 
 * High resolution T1 weighted anatomical MR image. 3D NIfTI format is required.
 	
-* `Multiatlas <http://dax.readthedocs.io/en/latest/news/spiders/Multi_Atlas.html>` assessor applied to the T1 image. The native space segmentation is used (SEG resource).
+* `Multiatlas <Multi_Atlas.html>`_ assessor applied to the T1 image. The native space segmentation is used (``SEG`` resource).
 
 * Functional MR image series. 4D NIfTI format is required.
 
