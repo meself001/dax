@@ -33,7 +33,7 @@ Data
 
 * High resolution T1 weighted anatomical MR image. 3D NIfTI format is required.
 	
-* Multiatlas assessor applied to the T1 image. The native space segmentation is used (SEG resource).
+* `Multiatlas <http://dax.readthedocs.io/en/latest/news/spiders/Multi_Atlas.html>` assessor applied to the T1 image. The native space segmentation is used (SEG resource).
 
 * Functional MR image series. 4D NIfTI format is required.
 
@@ -41,7 +41,7 @@ Data
 
   - Optional: the ``dropvols`` parameter of the scan indicates how many initial volumes will be discarded to account for image saturation. Defaults to 0.
 
-  - Optional: the 'slorder' parameter of the scan to indicate slice order for slice timing correction. May be ``ascending``, ``descending``, ``ascending_interleaved``, ``descending_interleaved``, or ``none``, in SPM12's meaning of the terms. Defaults to ``none``.
+  - Optional: the ``slorder`` parameter of the scan to indicate slice order for slice timing correction. May be ``ascending``, ``descending``, ``ascending_interleaved``, ``descending_interleaved``, or ``none``, in SPM12's meaning of the terms. Defaults to ``none``.
 
 * Filtering parameter file ``parameter_files/parameters_connectivity_preprocessing_v2.csv``. Contains parameters (with default values)::
 

@@ -1,20 +1,11 @@
 fMRI_Connectivity_PreProcess_Scan_v1_0_0
 ========================================
 
-* **What does it do?**
+Buggy, deprecated. See 
+`fMRI_Connectivity_PreProcess_Scan_v2_0_0 <fMRI_Connectivity_PreProcess_Scan_v2_0_0.html>`_.
 
-* **Requirements**
-
-* **Resources** *
-| OUTLOG - STDOUT and STDERR from the process on the grid
-| PBS - The DRMAA compliant batch script to run the job
-| PDF - The output PDF file for determining QA status
-| SNAPSHOTS - Thumbnail of the first page of the PDF resource for viewing on XNAT
-
-* **References**
-
-* **Version History**
-<revision> <name> <date> <lines changed>
+Version History
+---------------
 
 r3888 | damons | 2015-11-19 11:01:36 -0600 (Thu, 19 Nov 2015) | 1 line
 	repushing this bug fix because someone blew it away
@@ -33,5 +24,3 @@ r3358 | damons | 2015-09-14 12:03:55 -0500 (Mon, 14 Sep 2015) | 1 line
 r3271 | damons | 2015-09-02 10:05:31 -0500 (Wed, 02 Sep 2015) | 1 line
 	scan level spider
 
-**Current Contact Person**
-<date> <name> <email / URL> 
