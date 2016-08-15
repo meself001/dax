@@ -14,6 +14,9 @@ This version also allows for removal of phase data which may be acquired along w
 | Matlab R2013a >
 | SPM12 or >
 
+* **Off-line Compliance**
+Not compliant, uses XnatUtils.download_Scan with no offline flag
+
 * **Data Requirements**
 fMRIQA NIfTI files
 
