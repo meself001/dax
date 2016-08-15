@@ -1,6 +1,9 @@
 fMRIQA_v2_0_1
 =============
 
+
+
+
 * **What does it do?**
 For each fMRI series, the brain is identified by thresholding the mean image—averaged over all volumes—at its antimode (Luo 2003, http://www-personal.umich.edu/~nichols/PCT/). Voxel values are then converted to percent of the in-brain global mean. All quality metrics are computed on in-brain voxels, using the raw images prior to any other processing. Specifically, rigid body registration is not used except to compute voxel displacements.
 
