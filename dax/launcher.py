@@ -8,6 +8,7 @@ import os
 import sys
 import logging
 from datetime import datetime, timedelta
+import itertools
 
 import processors
 import modules
@@ -195,7 +196,7 @@ class Launcher(object):
         """
         return assr_info['procstatus'] == task.NEED_TO_RUN
 
-    def launch_tasks(self, task_list, writeonly=False, pbsdir=None):
+    def launch_tasks(self, task_list, writeonly=False, pbsdir=None, develop=False):
         """
         Launch tasks from the passed list until the queue is full or the list is empty
 
@@ -237,6 +238,8 @@ class Launcher(object):
                 else:
                     success = cur_task.launch(self.root_job_dir, self.job_email, self.job_email_options, self.xnat_host, writeonly, pbsdir)
             except Exception as E:
+                if develop:
+                    raise E
                 LOGGER.critical('Caught exception launching job %s' % cur_task.assessor_label)
                 LOGGER.critical('Exception class %s caught with message %s' %(E.__class__, E.message))
                 success = False
@@ -318,7 +321,7 @@ class Launcher(object):
                assr_info['qcstatus'] in task.OPEN_QA_LIST
 
     ################## BUILD Main Method ##################
-    def build(self, lockfile_prefix, project_local, sessions_local, mod_delta=None):
+    def build(self, lockfile_prefix, project_local, sessions_local, mod_delta=None, develop=False):
         """
         Main method to build the tasks and the sessions
 
@@ -356,15 +359,17 @@ class Launcher(object):
             for project_id in project_list:
                 LOGGER.info('===== PROJECT:'+project_id+' =====')
                 try:
-                    self.build_project(xnat, project_id, lockfile_prefix, sessions_local, mod_delta=mod_delta)
+                    self.build_project(xnat, project_id, lockfile_prefix, sessions_local, mod_delta=mod_delta, develop=develop)
                 except Exception as E:
+                    if develop:
+                        raise E
                     LOGGER.critical('Caught exception building project  %s' % project_id)
                     LOGGER.critical('Exception class %s caught with message %s' %(E.__class__, E.message))
 
         finally:
             self.finish_script(xnat, flagfile, project_list, 1, 2, project_local)
 
-    def build_project(self, xnat, project_id, lockfile_prefix, sessions_local, mod_delta=None):
+    def build_project(self, xnat, project_id, lockfile_prefix, sessions_local, mod_delta=None, develop=False):
         """
         Build the project
 
@@ -374,7 +379,6 @@ class Launcher(object):
         :param sessions_local: list of sessions to launch tasks
         :return: None
         """
-        
         #Modules prerun
         LOGGER.info('  *Modules Prerun')
         if sessions_local:
@@ -386,7 +390,7 @@ class Launcher(object):
 
         # Get lists of modules/processors per scan/exp for this project
         exp_mods, scan_mods = modules.modules_by_type(self.project_modules_dict[project_id])
-        exp_procs, scan_procs = processors.processors_by_type(self.project_process_dict[project_id])
+        exp_procs, scan_procs, multi_scan_procs = processors.processors_by_type(self.project_process_dict[project_id])
 
         if mod_delta:
             lastmod_delta = str_to_timedelta(mod_delta)
@@ -394,7 +398,7 @@ class Launcher(object):
             lastmod_delta = None
 
         # Check for new processors
-        has_new = self.has_new_processors(xnat, project_id, exp_procs, scan_procs)
+        has_new = self.has_new_processors(xnat, project_id, exp_procs, scan_procs, multi_scan_procs)
 
         # Get the list of sessions:
         sessions = self.get_sessions_list(xnat, project_id, sessions_local)
@@ -431,8 +435,10 @@ class Launcher(object):
                 update_start_time = datetime.now()
 
             try:
-                self.build_session(xnat, sess_info, exp_procs, scan_procs, exp_mods, scan_mods)
+                self.build_session(xnat, sess_info, exp_procs, scan_procs, exp_mods, scan_mods, multi_scan_procs, develop=develop)
             except Exception as E:
+                if develop:
+                    raise E
                 LOGGER.critical('Caught exception building sessions %s' % sess_info['session_label'])
                 LOGGER.critical('Exception class %s caught with message %s' %(E.__class__, E.message))
             
@@ -440,6 +446,8 @@ class Launcher(object):
                 if not self.skip_lastupdate:
                     self.set_session_lastupdated(xnat, sess_info, update_start_time)
             except Exception as E:
+                if develop:
+                    raise E
                 LOGGER.critical('Caught exception setting session timestamp %s' % sess_info['session_label'])
                 LOGGER.critical('Exception class %s caught with message %s' %(E.__class__, E.message))
 
@@ -449,11 +457,13 @@ class Launcher(object):
             try:
                 self.module_afterrun(xnat, project_id)
             except Exception as E:
+                if develop:
+                    raise E
                 LOGGER.critical('Caught exception after running modules %s')
                 LOGGER.critical('Exception class %s caught with message %s' %(E.__class__, E.message))
 
     def build_session(self, xnat, sess_info, sess_proc_list,
-                      scan_proc_list, sess_mod_list, scan_mod_list):
+                      scan_proc_list, sess_mod_list, scan_mod_list, multi_scan_proc_list, develop=False):
         """
         Build a session
 
@@ -480,11 +490,11 @@ class Launcher(object):
             # NOTE: we keep starting time to check if something changes below
             start_time = datetime.now()
             if sess_mod_list:
-                self.build_session_modules(xnat, csess, sess_mod_list)
+                self.build_session_modules(xnat, csess, sess_mod_list, develop=develop)
             if scan_mod_list:
                 for cscan in csess.scans():
                     LOGGER.debug('+SCAN: ' + cscan.info()['scan_id'])
-                    self.build_scan_modules(xnat, cscan, scan_mod_list)
+                    self.build_scan_modules(xnat, cscan, scan_mod_list, develop=develop)
 
             if not sess_was_modified(xnat, sess_info, start_time):
                 break
@@ -497,14 +507,17 @@ class Launcher(object):
         if scan_proc_list:
             for cscan in csess.scans():
                 LOGGER.debug('+SCAN: ' + cscan.info()['scan_id'])
-                self.build_scan_processors(xnat, cscan, scan_proc_list)
+                self.build_scan_processors(xnat, cscan, scan_proc_list, develop=develop)
 
         # Session Processors
         LOGGER.debug('== Build session processors ==')
         if sess_proc_list:
-            self.build_session_processors(xnat, csess, sess_proc_list)
+            self.build_session_processors(xnat, csess, sess_proc_list, develop=develop)
 
-    def build_session_processors(self, xnat, csess, sess_proc_list):
+        if multi_scan_proc_list:
+            self.build_multi_scan_processors(xnat, csess, multi_scan_proc_list, develop=develop)
+
+    def build_session_processors(self, xnat, csess, sess_proc_list, develop=False):
         sess_info = csess.info()
 
         for sess_proc in sess_proc_list:
@@ -549,6 +562,8 @@ class Launcher(object):
                         else:
                             sess_task.set_qcstatus(qcstatus)
                     except Exception as E:
+                        if develop:
+                            raise E
                         LOGGER.critical('Caught exception building session %s '
                                         'while setting assessor status' %
                                         sess_info['session_label'])
@@ -557,7 +572,7 @@ class Launcher(object):
                     # Other statuses handled by dax_update_tasks
                     pass
 
-    def build_session_modules(self, xnat, csess, sess_mod_list):
+    def build_session_modules(self, xnat, csess, sess_mod_list, develop=False):
         """
         Build a session
 
@@ -578,10 +593,12 @@ class Launcher(object):
                 try:
                     sess_mod.run(sess_info, sess_obj)
                 except Exception as E:
+                    if develop:
+                        raise E
                     LOGGER.critical('Caught exception building session module %s' % sess_info['session_label'])
                     LOGGER.critical('Exception class %s caught with message %s' %(E.__class__, E.message))
 
-    def build_scan_processors(self, xnat, cscan, scan_proc_list):
+    def build_scan_processors(self, xnat, cscan, scan_proc_list, develop=False):
         """
         Build the scan
 
@@ -637,14 +654,103 @@ class Launcher(object):
                         else:
                             scan_task.set_qcstatus(qcstatus)
                     except Exception as E:
+                        if develop:
+                            raise E
                         LOGGER.critical('Caught exception building sessions  %s' % scan_info['session_label'])
                         LOGGER.critical('Exception class %s caught with message %s' %(E.__class__, E.message))
                 else:
                     # Other statuses handled by dax_update_open_tasks
                     pass
 
+    def build_multi_scan_processors(self, xnat, csess, multi_scan_proc_list, develop=False):
+        """
+        Build the multi scan processors for a given session
 
-    def build_scan_modules(self, xnat, cscan, scan_mod_list):
+        :param xnat: pyxnat.Interface object
+        :param csess: CachedImageSession from XnatUtils
+        :param scan_proc_list: list of processors running on a scan
+        :return: None
+        """
+        scan_types = []
+        proc_types = []
+        for scan in csess.scans():
+            scan_types.append(scan.info())
+        for assessor in csess.assessors():
+            proc_types.append(assessor.info())
+
+        # for each processor collect the resources needed to run
+        for multi_scan_proc in multi_scan_proc_list:
+            scan_reqs, ass_reqs = multi_scan_proc.get_requirements_list()
+            scan_groups, ass_groups = processors.MultiScanProcessorYAML.determine_scan_assessor_groups(scan_types, proc_types, scan_reqs, ass_reqs)
+            bad = False
+            for i in range(len(scan_reqs)):
+                if len(scan_groups[i]) == 0:
+                    bad = True
+                    LOGGER.debug('No scan of type %s was found so %s cannot be built' % (",".join(scan_types[i]), multi_scan_proc.name))
+                    break
+            if bad:
+                break
+            for i in range(len(ass_reqs)):
+                if len(ass_groups[i]) == 0:
+                    bad = True
+                    LOGGER.debug('No assessor of type %s was found so %s cannot be built' % (",".join(proc_types[i]), multi_scan_proc.name))
+                    break
+            scan_groups = [list(x) for x in itertools.product(*scan_groups)]
+            ass_groups = [list(x) for x in itertools.product(*ass_groups)]
+            scan_ass_pairs = [list(x) for x in itertools.product(scan_groups, ass_groups)]
+            cached_assessors = csess.assessors()
+            for pair in scan_ass_pairs:
+                scan_pair = pair[0]
+                ass_pair = pair[1]
+                a,b = multi_scan_proc.should_run(scan_pair, ass_pair, csess, cached_assessors)
+                if not a:
+                    LOGGER.debug(b)
+                    continue;
+                for x in itertools.product(*b):
+                    x = list(x)
+                    assr_name = multi_scan_proc.get_assessor_name(scan_pair, ass_pair, x, csess)
+                    proc_assr = None
+                    for assr in cached_assessors:
+                        if assr.info()["label"] == assr_name:
+                            proc_assr = assr
+                            break
+                    if self.launcher_type in ['diskq-xnat', 'diskq-combined']:
+                        if proc_assr == None or proc_assr.info()['procstatus'] == task.NEED_INPUTS:
+                            assessor = csess.full_object().assessor(assr_name)
+                            xtask = XnatTask(multi_scan_proc, assessor, DAX_SETTINGS.get_results_dir(), os.path.join(DAX_SETTINGS.get_results_dir(), 'DISKQ'))
+                            LOGGER.debug('building task:' + assr_name)
+                            (proc_status, qc_status) = xtask.build_task(
+                                csess,
+                                self.root_job_dir,
+                                self.job_email,
+                                self.job_email_options)
+                            LOGGER.debug('proc_status=' + proc_status + ', qc_status=' + qc_status)
+                        else:
+                            # TODO: check that it actually exists in QUEUE
+                            LOGGER.debug('skipping, already built:' + assr_name)
+                    else:
+                        if proc_assr == None or proc_assr.info()['procstatus'] == task.NEED_INPUTS:
+                            if not proc_assr:
+                                proc_assr = csess.full_object().assessor(assr_name)
+                            ms_task = task.Task(multi_scan_proc, proc_assr, DAX_SETTINGS.get_results_dir())
+                            log_updating_status(multi_scan_proc.get_name(), ms_task.assessor_label)
+                            try:
+                                ms_task.set_status(task.NEED_TO_RUN)
+                                ms_task.set_qcstatus(task.JOB_PENDING)
+                            except Exception as E:
+                                if develop:
+                                    raise E
+                                LOGGER.critical('Caught exception building session %s '
+                                                'while setting assessor status' %
+                                                sess_info['session_label'])
+                                LOGGER.critical('Exception class %s caught with message %s' %(E.__class__, E.message))
+                        else:
+                            # Other statuses handled by dax_update_tasks
+                            pass
+
+
+
+    def build_scan_modules(self, xnat, cscan, scan_mod_list, develop=False):
 
         scan_info = cscan.info()
         scan_obj = None
@@ -660,10 +766,12 @@ class Launcher(object):
                 try:
                     scan_mod.run(scan_info, scan_obj)
                 except Exception as E:
+                    if develop:
+                        raise E
                     LOGGER.critical('Caught exception building session scan module in session %s' % scan_info['session_label'])
                     LOGGER.critical('Exception class %s caught with message %s' %(E.__class__, E.message))
 
-    def module_prerun(self, project_id, settings_filename=''):
+    def module_prerun(self, project_id, settings_filename='', develop=False):
         """
         Run the module prerun method
 
@@ -676,11 +784,13 @@ class Launcher(object):
             try:
                 mod.prerun(settings_filename)
             except Exception as E:
+                if develop:
+                    raise E
                 LOGGER.critical('Caught exception in module prerun for project %s' % project_id)
                 LOGGER.critical('Exception class %s caught with message %s' %(E.__class__, E.message))
         LOGGER.debug('\n')
 
-    def module_afterrun(self, xnat, project_id):
+    def module_afterrun(self, xnat, project_id, develop=False):
         """
         Run the module afterrun method
 
@@ -692,6 +802,8 @@ class Launcher(object):
             try:
                 mod.afterrun(xnat, project_id)
             except Exception as E:
+                if develop:
+                    raise E
                 LOGGER.critical('Caught exception in module prerun for project %s' % project_id)
                 LOGGER.critical('Exception class %s caught with message %s' %(E.__class__, E.message))
         LOGGER.debug('\n')
@@ -992,7 +1104,7 @@ The project is not part of the settings."""
         return True
 
     @staticmethod
-    def has_new_processors(xnat, project_id, sess_proc_list, scan_proc_list):
+    def has_new_processors(xnat, project_id, sess_proc_list, scan_proc_list, multi_scan_proc_list):
         """
         Check if has new processors
 
@@ -1007,7 +1119,7 @@ The project is not part of the settings."""
         assr_type_set = set([x['proctype'] for x in assr_list])
 
         # Get unique list of processors prescribed for project
-        proc_name_set = set([x.name for x in sess_proc_list+scan_proc_list])
+        proc_name_set = set([x.name for x in sess_proc_list+scan_proc_list+multi_scan_proc_list])
 
         # Get list of processors that don't have assessors in XNAT yet
         diff_list = list(proc_name_set.difference(assr_type_set))

@@ -4,6 +4,7 @@ import re
 import task
 import logging
 import XnatUtils
+import yaml
 
 #Logger for logs
 LOGGER = logging.getLogger('dax')
@@ -218,6 +219,270 @@ class ScanProcessor(Processor):
         else:
             return scan_dict['scan_type'] in self.scan_types
 
+class MultiScanProcessorYAML(Processor):
+    """ Base class for scan processors built with YAML"""
+    def __init__(self, yaml_dict, walltime_str=None, scan_types=None, memreq_mb=None, spider_path=None, version=None, suffix_proc=None, ppn=None, file_paths=None, assessor_types=None, name="generic_multi_scan_processor"):
+        super(MultiScanProcessorYAML, self).__init__(walltime_str if walltime_str else yaml_dict["walltime_str"],
+                                                memreq_mb if memreq_mb else yaml_dict["memreq_mb"],
+                                                spider_path if spider_path else yaml_dict["spider_path"],
+                                                version if version else yaml_dict["version"],
+                                                ppn if ppn else yaml_dict.get("ppn",1),
+                                                suffix_proc if suffix_proc else '')
+        self.yaml = yaml_dict
+        self.name = yaml_dict["name"]
+        self.version = yaml_dict.get("version","")
+        if not self.version.startswith("v"):
+            self.version = "v"+self.version
+        self.scan_dict = yaml_dict.get("scans", {})
+        self.assessor_dict = yaml_dict.get("assessors", {})
+        self.files_dict = yaml_dict.get("local_files", {})
+        # to be consistent
+        self.scan_keys = self.scan_dict.keys()
+        self.cmd = yaml_dict["command"]
+        self.spider_path = yaml_dict["spider_path"]
+        self.assessor_keys = self.assessor_dict.keys()
+        self.required_assessor_keys = []
+        self.nonrequired_assessor_keys = []
+        self.build_required_assessor_keys()
+        self.file_keys = self.files_dict.keys()
+
+        self.reference_dict = {}
+
+        self.name = yaml_dict.get("name", name)
+
+        # Allow for non-default scan, file, and assessors
+        if scan_types:
+            self.__parse_scan_types(scan_types)
+        if file_paths:
+            self.__parse_file_paths(file_paths)
+        if assessor_types:
+            self.__parse_assessor_types(assessor_types)
+
+    def get_cmds(self, assessor, tmp_dir):
+        reference_dict = {}
+        project = assessor.parent().parent().parent().label()
+        subject = assessor.parent().parent().label()
+        session = assessor.parent().label()
+        reference_dict["project"] = project
+        reference_dict["subject"] = subject
+        reference_dict["session"] = session
+        reference_dict["tmpdir"] = tmp_dir
+        reference_dict["spider_path"] = self.spider_path
+
+        xnat = XnatUtils.get_interface()
+        csess = XnatUtils.CachedImageSession(xnat, project, subject, session)
+
+        cached_assessors = csess.assessors()
+        assessor_name_dict = {x.info()["ID"]:x.info()["label"] for x in cached_assessors}
+
+        assessor_name = assessor.label()
+        assessor_info = assessor_name.split('-x-')[3]
+        scans = filter(lambda x: x, assessor_info.split("-x1x-")[0].split("-a-"))
+        assrs = filter(lambda x: x, assessor_info.split("-x1x-")[1].split("-x2x-")[0].split("-b-"))
+        d_assrs = filter(lambda x: x, assessor_info.split("-x2x-")[1].split("-c-"))
+
+        for i in xrange(len(scans)):
+            reference_dict[self.scan_keys[i]] = scans[i]
+        for i in xrange(len(assrs)):
+            assr_label = assessor_name_dict[assrs[i]]
+            reference_dict[self.required_assessor_keys[i][0]] = assr_label
+        for i in xrange(len(d_assrs)):
+            assr_label = assessor_name_dict[d_assrs[i]]
+            reference_dict[self.nonrequired_assessor_keys[i][0]] = assr_label
+        for i in xrange(len(self.file_keys)):
+            reference_dict[self.file_keys[i]] = self.files_dict[self.file_keys[i]]
+
+        cmd = self.cmd.format(**reference_dict)
+
+        return [cmd]
+
+
+    def get_name(self):
+        return "_".join([self.name, self.version])
+
+    def get_assessor_name(self, scan_names, ass_info, d_ass_info, csess):
+        name = ""
+        if len(scan_names) > 0:
+            scan_name = "-a".join([x["scan_id"] for x in scan_names])
+            name += scan_name
+        name += "-x1x-"
+        if len(ass_info) > 0:
+            ass_name = "-b-".join([x["assessor_id"] for x in ass_info])
+            name += ass_name
+        name += "-x2x-"
+        if len(d_ass_info) > 0:
+            d_ass_name = "-c-".join([x["assessor_id"] for x in d_ass_info])
+            name += d_ass_name
+
+        csess_info = csess.info()
+        project = csess_info["project_label"]
+        session = csess_info["session_label"]
+        subject = csess_info["subject_label"]
+        name = "-x-".join([project, subject, session, name, self.get_name()])
+        return name
+
+    def __build_reference_dict(self, yaml_dict):
+        for scan in self.scan_keys:
+            reference_name = self.scan_dict[scan].get("reference_name", scan)
+            self.reference_dict[reference_name] = self.scan_dict[scan]
+        for assessor in self.assessor_keys:
+            reference_name = self.assessor_dict[assessor].get("reference_name", assessor)
+            self.reference_dict[reference_name] = self.assessor_dict[assessor]
+        for file_name in self.file_keys:
+            reference_name = self.files_dict[file_name].get("reference_name", file_name)
+            self.reference_dict[reference_name] = self.files_dict[file_name]
+
+        self.reference_dict["spider_path"] = yaml_dict["spider_path"]
+
+    def build_required_assessor_keys(self):
+        # helper function to determine which keys are required
+        for i, assessor in enumerate(self.assessor_keys):
+            # if the assessor is not derived from another scan, it is required
+            if not self.assessor_dict[assessor].get("derive_from", False):
+                self.required_assessor_keys.append((assessor,i))
+            else:
+                self.nonrequired_assessor_keys.append((assessor,i))
+
+    def should_run(self, scan_list, ass_list, csess, casses):
+
+        # check if any scans are in either the known good or bad lists if provided
+        scan_names = [x["scan_label"] for x in scan_list]
+        for i, scan in enumerate(scan_list):
+            scan_YAML_info = self.scan_dict[self.scan_keys[i]]
+            scan_quality = scan.get("quality", "unknown")
+            quality_dict = scan_YAML_info.get("quality",{})
+            in_list = quality_dict.get("in")
+            out_list = quality_dict.get("out")
+
+            if in_list and not scan_quality in set(in_list):
+                out_str = "Scan %s's quality %s is not in the acceptable scan qualities (%s) for processor %s" % (scan["scan_id"], scan_quality, ",".join(in_list), self.name)
+                return False, out_str
+            if out_list and not scan_quality in set(in_list):
+                out_str = "Scan %s's quality %s is not in the unacceptable scan qualities (%s) for processor %s" % (scan["scan_id"], scan_quality, ",".join(out_list), self.name)
+                return False, out_str
+
+        # check if any required assessors are in either the known good or bad lists if provided
+        for i, ass in enumerate(ass_list):
+            ass_YAML_info = self.assessor_dict[self.required_assessor_keys[i][0]]
+            ass_quality = ass.get("quality", "unknown")
+            quality_dict = ass_YAML_info.get("quality", {})
+            in_list = quality_dict.get("in")
+            out_list = quality_dict.get("out")
+
+            if in_list and not ass_quality in set(in_list):
+                out_str = "Assessor %s's quality %s is not in the acceptable assessor qualities (%s) for processor %s" % (ass["label"], ass_quality, ",".join(in_list), self.name)
+                return False, out_str
+            if out_list and not ass_quality in set(in_list):
+                out_str = "Assessor %s's quality %s is not in the unacceptable assessor qualities (%s) for processor %s" % (ass["label"], ass_quality, ",".join(out_list), self.name)
+                return False, out_str
+
+        # check if any derived assessors are in either the known good or bad lists if provided
+        ass_names = [x.label() for x in casses]
+        derived_assessors = []
+        for i, ass in enumerate(self.nonrequired_assessor_keys):
+            ass_name = ass[0]
+            ass_number = ass[1]
+            ass_YAML_info = self.assessor_dict[ass_name]
+
+            derive_from = ass_YAML_info.get("derive_from",[])
+            valid_assessors = filter(lambda x: x.endswith(ass_name) , ass_names)
+            for df in derive_from:
+                scan_idx = filter(lambda x: self.scan_keys[x], range(len(self.scan_keys)))[0]
+                scan_name = scan_list[scan_idx]["label"]
+                valid_assessors = filter(lambda x: x.find(scan_name) > -1, valid_assessors)
+
+            if len(valid_assessors) == 0:
+                return False, "There were no valid assessors of type %s" % ass_name
+
+            good_assessors = []
+            for ass_i in valid_assessors:
+                for j, a in enumerate(casses):
+                    if ass_names[j] == ass_i:
+                        ass = a
+                        break
+                ass = ass.info()
+
+                ass_quality = ass.get("quality", "unknown")
+                quality_dict = ass_YAML_info.get("quality", {})
+                in_list = quality_dict.get("in")
+                out_list = quality_dict.get("out")
+
+                if in_list and not ass_quality in set(in_list):
+                    continue
+                if out_list and not ass_quality in set(in_list):
+                    continue
+                good_assessors.append(ass)
+            if len(good_assessors) == 0:
+                return False, "There were no valid assessors of type %s" % ass_name
+            derived_assessors.append(good_assessors)
+
+        return True, derived_assessors
+
+
+    def get_requirements_list(self):
+        scan_needs = []
+        ass_needs = []
+        for scan in self.scan_keys:
+            scan_needs.append(self.scan_dict[scan]["types"])
+        for ass in self.required_assessor_keys:
+            ass_needs.append(self.assessor_dict[ass[0]]["types"])
+        return scan_needs, ass_needs
+
+    def __parse_file_paths(self, file_paths):
+        for file_path in file_paths.keys():
+            self.files_dict[file_path] = file_paths[file_path]
+
+    def __parse_scan_types(self, scan_types):
+        for scan_types in scan_types.keys():
+            self.scan_dict[scan_type]["types"] = scan_types[scan_type]
+
+    def __parse_assessor_types(self, assessor_types):
+        for assessor_type in assessor_types.keys():
+            self.assessor_dict[assessor_type]["types"] = resource_types[resource_type]
+
+
+    def test(self):
+        # check if all the scans specify resources
+        for scan in self.scan_dict.keys():
+            resources = scan_dict[scan].get("resources",[])
+            if len(resources) == 0:
+                print >> sys.stderr, "Error! Scan %s does not specify any resources" % scan
+        for assessor in assessor_dict.keys():
+            resources = assessor_dict[assessor].get("resources", [])
+            if len(resources) == 0:
+                print >> sys.stderr, "Error! Resource %s does not specify any resources" % assessor
+            types = assessor_dict[assessor].get("types", [])
+            if len(types) == 0:
+                print >> sys.stderr, "Error! Resource %s does not specify any types" % assessor
+
+    @staticmethod
+    def determine_scan_assessor_groups(scan_list, ass_list, scan_reqs, ass_reqs):
+        grouped_scans = []
+        grouped_asses = []
+        if scan_reqs:
+            for scan_req in scan_reqs:
+                scans = []
+                for scan in scan_list:
+                    scan_l = scan["scan_type"].lower()
+                    for sr in scan_req:
+                        sr = sr.lower()
+                        if sr == scan_l:
+                            scans.append(scan)
+                grouped_scans.append(scans)
+        if ass_reqs:
+            for ass_req in ass_reqs:
+                asses = []
+                for ass in ass_list:
+                    ass_l = ass["proctype"].lower()
+                    for ar in ass_req:
+                        ar = ar.lower()
+                        if ar == ass_l:
+                            asses.append(ass)
+                grouped_asses.append(asses)
+        return grouped_scans, grouped_asses
+
+
+
 class SessionProcessor(Processor):
     """ Session Processor class for processor on a session on XNAT """
     def __init__(self, walltime_str, memreq_mb, spider_path, version=None, ppn=1, suffix_proc=''):
@@ -296,14 +561,17 @@ def processors_by_type(proc_list):
     """
     sess_proc_list = list()
     scan_proc_list = list()
+    multi_scan_proc_list = list()
 
     # Build list of processors by type
     for proc in proc_list:
         if issubclass(proc.__class__, ScanProcessor):
             scan_proc_list.append(proc)
+        elif issubclass(proc.__class__, MultiScanProcessorYAML):
+            multi_scan_proc_list.append(proc)
         elif issubclass(proc.__class__, SessionProcessor):
             sess_proc_list.append(proc)
         else:
             LOGGER.warn('unknown processor type:'+proc)
 
-    return sess_proc_list, scan_proc_list
+    return sess_proc_list, scan_proc_list, multi_scan_proc_list

@@ -26,6 +26,7 @@ def parse_args():
     ap.add_argument('--sessions', dest='sessions', help='list of sessions (labels) from XNAT to run dax_build on locally.', default=None)
     ap.add_argument('--nodebug', dest='debug', action='store_false', help='Avoid printing DEBUG information.')
     ap.add_argument('--mod', dest='mod_delta', help='Run build if modified within this window', default=None)
+    ap.add_argument('--develop', dest="develop", help='Throw exceptions natively (development mode)', default=False, action='store_true')
     return ap.parse_args()
 
 if __name__ == '__main__':
@@ -33,7 +34,7 @@ if __name__ == '__main__':
     
     if DAX_SETTINGS.is_cluster_valid():
         dax.bin.build(args.settings_path, args.logfile, args.debug,
-                      args.project, args.sessions, args.mod_delta)
+                      args.project, args.sessions, args.mod_delta, args.develop)
     else:
         sys.stdout.write('Please edit your settings via dax_setup for the \
 cluster section\n.')
