@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 '''
-Xnatmirror - copies Subjects, Sessions (MR, PET, CT), Scans and Assessors
+Xnatmirror - copies Subjects, Sessions (MR, PET, CT, US), Scans and Assessors
 '''
 
 from __future__ import print_function
@@ -116,6 +116,25 @@ MR_SCAN_ATTRS = [
     'xnat:mrScanData/marker',
     'xnat:mrScanData/stabilization',
     'xnat:mrScanData/coil'
+]
+
+US_SCAN_ATTRS = [
+    'xnat:imageScanData/type',
+    'xnat:imageScanData/UID',
+    'xnat:imageScanData/note',
+    'xnat:imageScanData/quality',
+    'xnat:imageScanData/condition',
+    'xnat:imageScanData/series_description',
+    'xnat:imageScanData/scanner/manufacturer',
+    'xnat:imageScanData/scanner/model'
+]
+
+US_EXP_ATTRS = [
+    'xnat:experimentData/date',
+    'xnat:experimentData/time',
+    'xnat:imageSessionData/operator',
+    'xnat:imageSessionData/scanner/model',
+    'xnat:experimentData/acquisition_site'
 ]
 
 SC_SCAN_ATTRS = [
@@ -246,6 +265,10 @@ def check_attributes(src_obj, dest_obj, dtype=None):
         attr_list = MR_EXP_ATTRS
     elif dtype == 'xnat:mrScanData':
         attr_list = MR_SCAN_ATTRS
+    elif dtype == 'xnat:usSessionData':
+        attr_list = US_EXP_ATTRS
+    elif dtype == 'xnat:usScanData':
+        attr_list = US_SCAN_ATTRS
     elif dtype == 'xnat:scScanData':
         attr_list = SC_SCAN_ATTRS
     elif dtype == 'xnat:petScanData':
@@ -291,12 +314,16 @@ def copy_attributes(src_obj, dest_obj):
         copy_attrs(src_obj, dest_obj, SUBJ_ATTRS)
     elif src_type == 'xnat:mrSessionData':
         copy_attrs(src_obj, dest_obj, MR_EXP_ATTRS)
+    elif src_type == 'xnat:usSessionData':
+        copy_attrs(src_obj, dest_obj, US_EXP_ATTRS)
     elif src_type == 'xnat:petSessionData':
         copy_attrs(src_obj, dest_obj, PET_EXP_ATTRS)
     elif src_type == 'xnat:ctSessionData':
         copy_attrs(src_obj, dest_obj, CT_EXP_ATTRS)
     elif src_type == 'xnat:mrScanData':
         copy_attrs(src_obj, dest_obj, MR_SCAN_ATTRS)
+    elif src_type == 'xnat:usScanData':
+        copy_attrs(src_obj, dest_obj, US_SCAN_ATTRS)
     elif src_type == 'xnat:petScanData':
         copy_attrs(src_obj, dest_obj, PET_SCAN_ATTRS)
     elif src_type == 'xnat:ctScanData':
@@ -434,10 +461,12 @@ def copy_subject(src_subj, dst_subj, subj_cache_dir):
     for src_sess in src_subj.experiments().fetchall('obj'):
         sess_label = src_sess.label()
         sess_type = src_sess.datatype()
+
         if sess_type != 'xnat:mrSessionData' and \
             sess_type != 'xnat:petSessionData' and \
+            sess_type != 'xnat:usSessionData' and \
             sess_type != 'xnat:ctSessionData':
-            print('WARN:Skipping, session is not MR, CT, or PET Session')
+            print('WARN:Skipping, session is not MR, CT, US or PET Session')
             continue
 
         print("INFO:Processing session:%s..." % (sess_label))
@@ -630,12 +659,16 @@ Warning: you need to keep the same folder than the previous Xnatmirror call.')
         help="Check Attributes of Existing Data, recopy any that don't match",
         action='store_true', default=False
     )
+    parser.add_argument(
+        '--noverify', action='store_true', default=False,
+        help='Check authenticity of host certificate.'
+    )
     return parser.parse_args()
 
 
-def interface_xnat(host, user, pwd):
+def interface_xnat(host, user, pwd, verify):
     """Create interface with XNAT and check connection."""
-    intf = Interface(host, user, pwd)
+    intf = Interface(host, user, pwd, verify)
     try:
         XnatUtils.list_projects(intf)
     except:
@@ -708,6 +741,7 @@ if __name__ == '__main__':
     DEST_PROJECT = SRC_PROJECT
     CHECK_ATTRS = args.ca
     CHECK_FILES = args.cf
+    CHECK_CERT  = not args.noverify
     CACHEDIR = os.path.join(args.directory, 'Xnatmirror__'+DEST_PROJECT)
 else:
     sys.exit(1)
@@ -758,13 +792,16 @@ print('\n\nTime: ', str(datetime.now()), '====================================\
 ====================')
 
 # Create pyxnat Interfaces
+
 src_xnat = interface_xnat(logs_info['SRC_XNAT_HOST'],
                           logs_info['SRC_XNAT_USER'],
-                          logs_info['SRC_XNAT_PASS'])
+                          logs_info['SRC_XNAT_PASS'],
+                          verify=CHECK_CERT)
 
 dst_xnat = interface_xnat(logs_info['DEST_XNAT_HOST'],
                           logs_info['DEST_XNAT_USER'],
-                          logs_info['DEST_XNAT_PASS'])
+                          logs_info['DEST_XNAT_PASS'],
+                          verify=CHECK_CERT)
 
 SKIPPING_PROC_DATA = False
 # TODO: confirm datatypes and variables exist on destination XNAT

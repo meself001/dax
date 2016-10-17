@@ -104,19 +104,21 @@ class InterfaceTemp(Interface):
      NOTE: This is deprecated in pyxnat 1.0.0.0
     """
     def __init__(self, xnat_host=None, xnat_user=None, xnat_pass=None,
-                 temp_dir=None):
+                 verify=False, temp_dir=None):
         """Entry point for the InterfaceTemp class.
 
         :param xnat_host: XNAT Host url
         :param xnat_user: XNAT User ID
         :param xnat_pass: XNAT Password
         :param temp_dir: Directory to write the Cache to
+        :param verify: Check SSL certificate for HTTPS
         :return: None
 
         """
         self.host = xnat_host
         self.user = xnat_user
         self.pwd = xnat_pass
+        self.verify = verify
         if not xnat_user:
             self.user = os.environ['XNAT_USER']
         if not xnat_pass:
@@ -131,14 +133,16 @@ class InterfaceTemp(Interface):
         super(InterfaceTemp, self).__init__(server=self.host,
                                             user=self.user,
                                             password=self.pwd,
+                                            verify=self.verify,
                                             cachedir=self.temp_dir)
 
     def __enter__(self, xnat_host=None, xnat_user=None, xnat_pass=None,
-                  temp_dir=None):
+                  verify=False, temp_dir=None):
         """Enter method for with statement."""
         self.host = xnat_host
         self.user = xnat_user
         self.pwd = xnat_pass
+        self.verify = verify
         if not xnat_user:
             self.user = os.environ['XNAT_USER']
         if not xnat_pass:
@@ -153,6 +157,7 @@ class InterfaceTemp(Interface):
         super(InterfaceTemp, self).__init__(server=self.host,
                                             user=self.user,
                                             password=self.pwd,
+                                            verify=self.verify,
                                             cachedir=self.temp_dir)
 
     def __exit__(self, type, value, traceback):
